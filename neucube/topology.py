@@ -85,3 +85,46 @@ def SWC(dist, swr=0.15, input_n=False):
         w_mat = torch.where(conn_mat == 1., torch.rand_like(conn_mat) / dist, torch.zeros_like(conn_mat))
     
     return w_mat
+
+def small_world_connectivity_alt(dist, c, l):
+    """
+    Calculates a small-world network connectivity matrix based on the given distance matrix.
+    The differences between this function and the original (without the _test suffix) are:
+    
+    * The way maximum and minimum distances are calculated. 
+    * Using an alternative approach to eliminating self connections (a connection from a neuron i to itself) 
+    without using the .fill_diagonal__() method.
+
+    Args:
+        dist (torch.Tensor): The distance matrix representing pairwise distances between nodes.
+        c (float): Maximum connection probability
+        l (float): Small world connection radius
+
+    Returns:
+        torch.Tensor: Connectivity matrix.
+
+    """
+
+    # Calculate min and max distances
+    dist_min = torch.min(dist, dim=1).values[:, None].min()
+    dist_max = torch.max(dist, dim=1).values[:, None].max()
+    
+    # Normalize the distance matrix
+    dist_norm = (dist - dist_min) / (dist_max - dist_min)
+
+    # Calculate the connection probability matrix
+    conn_prob = c * torch.exp(-(dist_norm / l) ** 2)
+
+    # this approach ensures no self connections occur without using 
+    # the .fill_diagonal_(0) method because it only works 
+    # if the connection matrix is a N x N matrix, otherwise
+    # it cannot be guaranteed that self connections are eliminated
+    # especially in the case of input neurons
+    conn_mat_non_self = torch.where(dist_norm == 0., torch.zeros_like(dist_norm), torch.ones_like(dist_norm))
+    
+    conn_prob_non_self = torch.where(conn_mat_non_self == 1., conn_prob, torch.zeros_like(conn_mat_non_self))
+
+    # Create the input connectivity matrix by selecting connections based on probability
+    input_conn = torch.where(torch.rand_like(conn_prob) < conn_prob_non_self, conn_prob_non_self, torch.zeros_like(conn_prob))
+
+    return input_conn
