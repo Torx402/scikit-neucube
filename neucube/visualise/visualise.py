@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 import neucube
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 
 def spike_raster(spike_activity, fig_size=(10, 5)):
     """
@@ -33,7 +35,7 @@ def spike_raster(spike_activity, fig_size=(10, 5)):
     plt.ylabel('Neuron Index')
     plt.show()
 
-def plot_connections(reservoir, exci_thres=0.002, inhi_thres=-0.003, fig_size=(10, 8), title=None, eeg_coordinates=None, input_only=False):
+def plot_connections(reservoir, exci_thres=0.002, inhi_thres=-0.003, highlight=False, percentile=75, fig_size=(10, 8), title=None):
     """
     Plot the connections within a NeuCube reservoir.
 
@@ -41,7 +43,10 @@ def plot_connections(reservoir, exci_thres=0.002, inhi_thres=-0.003, fig_size=(1
     - reservoir (neucube.Reservoir): NeuCube Reservoir object.
     - exci_thres (float): Excitatory threshold for plotting connections. Default is 0.002.
     - inhi_thres (float): Inhibitory threshold for plotting connections. Default is -0.003.
+    - highlight (bool): Plot connectivity with values belonging to a given percentile. Default is False.
+    - percentile (int): Percentile value used if highlight is True. Default is 75.
     - fig_size (tuple): Figure size (width, height) in inches. Default is (10, 8).
+    - title (str): Figure title. Default is None.
 
     Raises:
     - ValueError: If the input is not a NeuCube Reservoir object.
@@ -50,6 +55,12 @@ def plot_connections(reservoir, exci_thres=0.002, inhi_thres=-0.003, fig_size=(1
     # Check if the input is a NeuCube Reservoir object
     if not isinstance(reservoir, neucube.Reservoir):
         raise ValueError('Input should be a NeuCube Reservoir object')
+
+    if highlight:
+        pos_weights = reservoir.w_latent_[torch.where(reservoir.w_latent_ > 0.)].cpu().numpy()
+        neg_weights = reservoir.w_latent_[torch.where(reservoir.w_latent_ < 0.)].cpu().numpy()
+        exci_thres = np.percentile(pos_weights, percentile)
+        inhi_thres = np.percentile(neg_weights, 100-percentile)
 
     exci_vis_conn = torch.where(reservoir.w_latent_ > exci_thres)
     inh_vis_conn = torch.where((reservoir.w_latent_ != 0) & (reservoir.w_latent_ < inhi_thres))
@@ -65,17 +76,11 @@ def plot_connections(reservoir, exci_thres=0.002, inhi_thres=-0.003, fig_size=(1
     fig = plt.figure(figsize=fig_size)
     ax = fig.add_subplot(111, projection='3d')
     ax.scatter(*reservoir.pos_.T.cpu(), c='black', marker='o')
-    
-    if eeg_coordinates is not None:
-        for channel in eeg_coordinates:
-            ax.scatter(*eeg_coordinates[channel], c='green', marker='s')
-            zdir = (eeg_coordinates[channel][0] + 1, eeg_coordinates[channel][1] + 1, eeg_coordinates[channel][2] + 1)
-            ax.text(eeg_coordinates[channel][0], eeg_coordinates[channel][1], eeg_coordinates[channel][2], channel, zdir, bbox=dict(facecolor='red', alpha=0.5))
-    if input_only is False:
-        exci_lines = np.stack([exci_x, exci_b, exci_c], axis=-1)
-        ax.add_collection3d(Line3DCollection(exci_lines, colors='blue'))
-        inhi_lines = np.stack([inhi_a, inhi_b, inhi_c], axis=-1)
-        ax.add_collection3d(Line3DCollection(inhi_lines, colors='red'))
+
+    exci_lines = np.stack([exci_x, exci_b, exci_c], axis=-1)
+    ax.add_collection3d(Line3DCollection(exci_lines, colors='blue'))
+    inhi_lines = np.stack([inhi_a, inhi_b, inhi_c], axis=-1)
+    ax.add_collection3d(Line3DCollection(inhi_lines, colors='red'))
 
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
@@ -84,18 +89,22 @@ def plot_connections(reservoir, exci_thres=0.002, inhi_thres=-0.003, fig_size=(1
         ax.set_title(title)
     plt.show()
     
-def plot_connections_detailed(reservoir, sup_title=None, exci_thres=0.002, inhi_thres=-0.003, fig_size=(10, 8), eeg_coordinates=None):
+def plot_connections_detailed(reservoir, sup_title=None, highlight=False, percentile=75, exci_thres=0.002, inhi_thres=-0.003, fig_size=(12, 12), eeg_coordinates=None):
     """
     Plot the connections within a NeuCube reservoir.
 
     Parameters:
     - reservoir (neucube.Reservoir): NeuCube Reservoir object.
-    - exci_thres (float): Excitatory threshold for plotting connections. Default is 0.002.
-    - inhi_thres (float): Inhibitory threshold for plotting connections. Default is -0.003.
-    - fig_size (tuple): Figure size (width, height) in inches. Default is (10, 8).
+    - sup_title (str): Figure title. Default is None.
+    - highlight (bool): Plot connectivity with values belonging to a given percentile. Default is False.
+    - percentile (int): Percentile value used if highlight is True. Default is 75.
+    - exci_thres (float): Excitatory threshold for plotting connections, overriden if highlight is True. Default is 0.002.
+    - inhi_thres (float): Inhibitory threshold for plotting connections, overriden if highlight is True. Default is -0.003.
+    - fig_size (tuple): Figure size (width, height) in inches. Default is (12, 12).
+    - eeg_coordinates (dict): Dictionary consisting of input neurons and corresponding text label. Default is None. 
 
     Raises:
-    - ValueError: If the input is not a NeuCube Reservoir object.
+    - ValueError: If the input is not a NeuCube Reservoir object and/or if eeg_coordinates is not provided.
     """
 
     # Check if the input is a NeuCube Reservoir object
@@ -104,6 +113,17 @@ def plot_connections_detailed(reservoir, sup_title=None, exci_thres=0.002, inhi_
 
     if eeg_coordinates is None:
         raise ValueError("EEG Info must be provided")
+    
+    
+    pos_weights = reservoir.w_latent_[torch.where(reservoir.w_latent_ > 0.)].cpu().numpy()
+    neg_weights = reservoir.w_latent_[torch.where(reservoir.w_latent_ < 0.)].cpu().numpy()
+    pos_avg, pos_std = pos_weights.mean(), np.std(pos_weights)
+    neg_avg, neg_std = neg_weights.mean(), np.std(neg_weights)
+    
+    
+    if highlight:
+        exci_thres = np.percentile(pos_weights, percentile)
+        inhi_thres = np.percentile(neg_weights, 100-percentile)
     
     exci_vis_conn = torch.where(reservoir.w_latent_ > exci_thres)
     inh_vis_conn = torch.where((reservoir.w_latent_ != 0) & (reservoir.w_latent_ < inhi_thres))
@@ -118,8 +138,7 @@ def plot_connections_detailed(reservoir, sup_title=None, exci_thres=0.002, inhi_
 
     fig, axs = plt.subplots(2, 2, figsize=fig_size, subplot_kw=dict(projection='3d'))
     
-    if sup_title is str:
-        fig.suptitle(sup_title)
+
     
     ax1 = axs[0, 0]
     ax2 = axs[0, 1]
@@ -145,11 +164,24 @@ def plot_connections_detailed(reservoir, sup_title=None, exci_thres=0.002, inhi_
     axes[1].add_collection3d(Line3DCollection(exci_lines, colors='blue'))
     inhi_lines = np.stack([inhi_a, inhi_b, inhi_c], axis=-1)
     axes[1].add_collection3d(Line3DCollection(inhi_lines, colors='red'))
+    axes[1].legend(handles=[Line2D([0], [0], color='red', lw=3, label='Negative Connection'),
+                     Line2D([0], [0], color='blue', lw=3, label='Positive Connection')])
     
     axes[2].set_title("Excitatory Connections")
     axes[2].add_collection3d(Line3DCollection(exci_lines, colors='blue'))
+    axes[2].legend(handles=[Rectangle((0, 0), 1, 1, fc="w", fill=False, edgecolor='none', linewidth=0, label=f'Positive Weights: {pos_weights.shape[0]}'),
+                     Rectangle((0, 0), 1, 1, fc="w", fill=False, edgecolor='none', linewidth=0, label=(f'Mean (std): {"{:.2f}".format(pos_avg)} ({"{:.2f}".format(pos_std)})')),
+                     Rectangle((0, 0), 1, 1, fc="w", fill=False, edgecolor='none', linewidth=0, label=f'{percentile} Percentile: {"{:.2f}".format(exci_thres)}')])
 
     axes[3].set_title("Inhibitory Connections")
     axes[3].add_collection3d(Line3DCollection(inhi_lines, colors='red'))
+    axes[3].legend(handles=[Rectangle((0, 0), 1, 1, fc="w", fill=False, edgecolor='none', linewidth=0, label=f'Negative Weights: {neg_weights.shape[0]}'),
+                     Rectangle((0, 0), 1, 1, fc="w", fill=False, edgecolor='none', linewidth=0, label=f'Mean (std): {"{:.2f}".format(neg_avg)} ({"{:.2f}".format(neg_std)})'),
+                     Rectangle((0, 0), 1, 1, fc="w", fill=False, edgecolor='none', linewidth=0, label=f'{100-percentile} Percentile: {"{:.2f}".format(inhi_thres)}')])
+    
+
+    
+    if type(sup_title) is str:
+        plt.suptitle(sup_title)
     
     plt.show()
