@@ -100,7 +100,7 @@ class Delta(Encoder):
       return self
 
 class TBR():
-  def __init__(self, alpha_tr=0.5, neg=False):
+  def __init__(self, threshold=0.5, neg=False):
     """
     Initializes the Address Event Representation (Threshold Based Representation) encoder with a threshold scale value.
 
@@ -108,16 +108,22 @@ class TBR():
       threshold (float, optional): Threshold scale value for value threshold calculation. Defaults to 0.5.
       neg (bool, optional): Flag to control the generate spike trains, excitatory only vs excitatory and inhibitory. Defaults to False. 
     """
-    self.alpha_tr = alpha_tr
+    self.threshold = threshold
     self.neg = neg
     self.tbr_array = None
   
-  def value_threshold(self, diff_X: torch.Tensor):
+  def __repr__(self):
+    return f"{type(self).__name__}(threshold={self.threshold}, neg={self.neg})"
+  
+  def __sklearn_clone__(self):
+    return self
+  
+  def value_threshold(self, diff_X):
     std, mean = torch.std_mean(diff_X)
-    V_t = mean + (std * self.alpha_tr)
+    V_t = mean + (std * self.threshold)
     return V_t
   
-  def diff_signal(self, sample: torch.Tensor, fit=False):
+  def diff_signal(self, sample, fit=False):
     
     aux = torch.cat((sample[0].unsqueeze(0), sample))[:-1]
     if fit:
@@ -127,7 +133,7 @@ class TBR():
       
     return diff_X
   
-  def fit(self, X: torch.Tensor, y=None):
+  def fit(self, X, y=None):
     
     tbr_array = torch.zeros(X.shape[2], X.shape[0])
     for i in range(X.shape[0]):
@@ -184,7 +190,7 @@ class TBR():
     return spike_train
   
   def get_params(self, deep=None):
-      return {"Alpha TR": self.alpha_tr, "Negative Spikes": self.neg, "TBR Array": self.tbr_array}
+      return {"threshold": self.threshold, "neg": self.neg}
   
   def set_params(self, **parameters):
       for parameter, value in parameters.items():
