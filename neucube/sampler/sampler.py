@@ -138,25 +138,30 @@ class DeSNNt():
         """
         
         state_vectors = torch.zeros((X.shape[0], X.shape[2]))
-
-        for i in range(X.shape[0]):
+    
+        for sample in range(X.shape[0]):
             fire_mat = torch.zeros(X.shape[2])
             w_mat = torch.zeros(X.shape[2])
 
-            for j in range(X.shape[1]):
-            
-                fired_indices = X[i, j].nonzero().reshape(-1)
-                for idx in fired_indices:
-                    if fire_mat[idx] == 0.:
-                        w_mat[idx] = self.mod ** fire_mat.sum()
-                        fire_mat[idx] = 1.
-                    else:
-                        w_mat[idx] = w_mat[idx] + self.drift
+            for time_step in range(X.shape[1]):
+                activity = X[sample, time_step]
                 
-                w_mat = torch.where(X[i, j] == 0., w_mat - self.drift, w_mat)
+                inverse_fire_mat = 1. - fire_mat
+                
+                already_fired = torch.logical_and(fire_mat, activity).to(dtype=torch.float32)
+                first_time_firing = torch.logical_and(inverse_fire_mat, activity).to(dtype=torch.float32)
+                
+                
+                for idx in first_time_firing.nonzero().reshape(-1):
+                    w_mat[idx] = self.mod ** fire_mat.sum()
+                    fire_mat[idx] = 1.
+                
+                w_mat[already_fired.nonzero().reshape(-1)] += self.drift
+                
+                w_mat = torch.where(X[sample, time_step] == 0., w_mat - self.drift, w_mat)
+
+            state_vectors[sample] = w_mat 
             
-            state_vectors[i] = w_mat 
-        
         return state_vectors
     
     def fit_transform(self, X, y=None):
