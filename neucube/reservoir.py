@@ -1,13 +1,13 @@
 import torch
 from tqdm import tqdm
 import math
-from .topology import small_world_connectivity, SWC
+from .topology import small_world_connectivity, SWC, small_world_connectivity_test
 from .utils import print_summary
 from .training import STDP
 from .training import NRDP
 
 class Reservoir():
-  def __init__(self, cube_shape=(10,10,10), inputs=14, coordinates=None, mapping=None, swc=0, swr=0.15, c=0.4, l=0.169, c_in=0.9, l_in=1.2, mem_thr=0.1, refractory_period=5, learning_rule=STDP()):
+  def __init__(self, cube_shape=(10,10,10), inputs=14, coordinates=None, mapping=None, swc=0, swr=0.15, c=0.4, l=0.169, c_in=0.9, l_in=1.2, leak_rate=0.002, mem_thr=0.1, refractory_period=5, learning_rule=STDP(), n_train=1, device=None):
     """
     Initializes the reservoir object.
 
@@ -18,15 +18,18 @@ class Reservoir():
                                     If not provided, the coordinates are generated based on `cube_shape`.
         mapping (torch.Tensor): Coordinates of the input neurons, must be a subset of reservoir's neurons.
                                 If not provided, random connectivity is used.
-        c (float): Parameter controlling the connectivity of the reservoir.
-        l (float): Parameter controlling the connectivity of the reservoir.
-        swc (int): Parameter controlling which Small World Connectivity mode is used. (0 or a random int)
-        swr (float): Parameter controlling the Small World Radius (SWR).
-        c_in (float): Parameter controlling the connectivity of the input neurons.
-        l_in (float): Parameter controlling the connectivity of the input neurons.
-        mem_thr (float): Membrane threshold for spike generation.
+        swc (int): Parameter controlling which Small World Connectivity mode is used. (0 for probabilistic, random int for non-probabilistic)
+        swr (float): Parameter controlling the Small World Radius (SWR) when using non-probabilistic SWC.
+        c (float): Parameter controlling the connection probability of the reservoir when using probabilistic SWC.
+        l (float): Parameter controlling the SWR of the reservoir when using probabilistic SWC.
+        c_in (float): Parameter controlling the connection probability of the input neurons when using probabilistic SWC.
+        l_in (float): Parameter controlling the SWR of the input neurons when using probabilistic SWC.
+        leak_rate (float): Parameter that controls the leak rate of the LIF neuron.
+        mem_thr (float): Action-potential threshold for spike generation.
         refractory_period (int): Refractory period after a spike.
         learning_rule (LearningRule): The learning rule implementation to use for training.
+        n_train (int): Number of unsupervised STDP learning iterations.
+        device (str): String to indicate which device to use ('cuda', 'cpu', 'mps', defaults to 'cpu' if None).
     """
     
     self.cube_shape = cube_shape
@@ -39,18 +42,21 @@ class Reservoir():
     self.l = l
     self.c_in = c_in
     self.l_in = l_in
+    self.leak_rate = leak_rate
     self.mem_thr = mem_thr
     self.refractory_period = refractory_period
     self.learning_rule = learning_rule
-    self.trained_ = False
+    self.n_train = n_train
+    self.device = device
     
     self.__init_model()
 
   def __repr__(self):
-    return f"{type(self).__name__}(cube_shape={self.cube_shape}, inputs={self.inputs}, swc={self.swc}, swr={self.swr}, c={self.c}, l={self.l}, c_in={self.c_in}, l={self.l_in}, mem_thr={self.mem_thr}, refractory_period={self.refractory_period}, learning_rule={self.learning_rule})"
+    return f"{type(self).__name__}(cube_shape={self.cube_shape}, inputs={self.inputs}, swc={self.swc}, swr={self.swr}, c={self.c}, l={self.l}, c_in={self.c_in}, l={self.l_in}, leak_rate={self.leak_rate}, mem_thr={self.mem_thr}, refractory_period={self.refractory_period}, learning_rule={self.learning_rule}, n_train={self.n_train})"
   
   def __init_model(self):
-    self.device_ = torch.device("cuda:0" if torch.cuda.is_available() else "cpu:0")
+    self.trained_ = False
+    self.device_ = torch.device(self.device if (self.device != None) else 'cpu')
     
     if self.coordinates is None:
       self.n_neurons_ = math.prod(self.cube_shape)
@@ -64,7 +70,7 @@ class Reservoir():
 
     dist = torch.cdist(self.pos_, self.pos_)
     if self.swc == 0:
-      conn_mat = small_world_connectivity(dist, self.c, self.l) / 100
+      conn_mat = small_world_connectivity_test(dist, self.c, self.l) / 100
     else:
       conn_mat = SWC(dist, swr=self.swr)
     inh_n = torch.randint(self.n_neurons_, size=(int(self.n_neurons_*0.2),))
@@ -77,7 +83,7 @@ class Reservoir():
         self.mapping = torch.tensor(self.mapping).to(self.device_)
       dist_in = torch.cdist(self.pos_, self.mapping, p=2)
       if self.swc == 0:
-        input_conn = small_world_connectivity(dist_in, self.c_in, self.l_in) / 50
+        input_conn = small_world_connectivity_test(dist_in, self.c_in, self.l_in) / 50
       else:
         input_conn = 2 * SWC(dist_in, self.swr, input_n=True)
 
@@ -90,17 +96,6 @@ class Reservoir():
     return self
   
   def _fit(self, X, y=None, verbose=True):
-    """
-    Fits the reservoir to the input data using a specified learning rule.
-
-    Parameters:
-        X (torch.Tensor): Input data of shape (batch_size, n_time, n_features).
-        verbose (bool): Flag indicating whether to display progress during simulation.
-
-    Returns:
-        Reservoir: An instance of the fitted reservoir.
-    """
-
     self.batch_size_, self.n_time_, self.n_features_ = X.shape
 
     self.learning_rule.setup(self.device_, self.n_neurons_)
@@ -146,10 +141,23 @@ class Reservoir():
     return self
   
   def fit(self, X, y=None, verbose=True):
+    """
+      Fits the reservoir to the input data using a specified learning rule.
+
+      Parameters:
+          X (torch.Tensor): Input data of shape (batch_size, n_time, n_features).
+          verbose (bool): Flag indicating whether to display progress during simulation.
+
+      Returns:
+          Reservoir: An instance of the fitted reservoir.
+    """
     if self.trained_ == True:
       return self
-    else:
-      return self._fit(X, y, verbose)
+    elif self.trained_ == False:
+      for i in range(self.n_train):
+        self._fit(X, y, verbose)
+      self.trained_ = True
+    return self
   
   def transform(self, X, y=None, verbose=True):
     """
@@ -183,7 +191,7 @@ class Reservoir():
         refrac[refrac_count < 1] = 1
 
         I = torch.sum(self.w_in_*spike_in, axis=1)+torch.sum(self.w_latent_*spike_latent, axis=1)
-        mem_poten = mem_poten*torch.exp(torch.tensor(-(1/400)))*(1-spike_latent)+(refrac*I)
+        mem_poten = mem_poten*torch.exp(torch.tensor(-(self.leak_rate)))*(1-spike_latent)+(refrac*I)
 
         spike_latent[mem_poten >= self.mem_thr] = 1
         spike_latent[mem_poten < self.mem_thr] = 0
@@ -224,7 +232,7 @@ class Reservoir():
     print_summary(res_info)
     
   def get_params(self, deep=None):
-    return {"cube_shape": self.cube_shape, "inputs": self.inputs, "coordinates": self.coordinates, "mapping": self.mapping, "swc": self.swc, "swr": self.swr, "c": self.c, "l": self.l, "c_in": self.c_in, "l_in": self.l_in, "mem_thr": self.mem_thr, "refractory_period": self.refractory_period, "learning_rule": self.learning_rule}
+    return {"cube_shape": self.cube_shape, "inputs": self.inputs, "coordinates": self.coordinates, "mapping": self.mapping, "swc": self.swc, "swr": self.swr, "c": self.c, "l": self.l, "c_in": self.c_in, "l_in": self.l_in, "leak_rate": self.leak_rate, "mem_thr": self.mem_thr, "refractory_period": self.refractory_period, "learning_rule": self.learning_rule, "n_train": self.n_train}
   
   def set_params(self, **params):
     for parameter, value in params.items():
